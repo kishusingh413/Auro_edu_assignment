@@ -1,38 +1,65 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from .models import db, User, Document, Embedding, SelectedDocument
+from werkzeug.utils import secure_filename
+import os
+
+from .models import db, Document, Embedding, SelectedDocument
 from .embeddings import generate_embedding
 from .retrieval import retrieve_documents
 
 main = Blueprint("main", __name__)
 
-# Document Ingestion
+# Upload a new document
 @main.route("/upload", methods=["POST"])
 @jwt_required()
 def upload_document():
-    data = request.json
-    if "title" not in data or "content" not in data:
-        return jsonify({"error": "Title and content are required"}), 400
+    # Check if file is provided and valid
+    if "file" not in request.files or not request.files["file"].filename:
+        return jsonify({"error": "No selected file"}), 400
 
-    document = Document(title=data["title"], content=data["content"])
+    file = request.files['file']
+    filename = secure_filename(file.filename)
+    upload_folder = current_app.config.get("UPLOAD_FOLDER")
+    if not os.path.exists(upload_folder):
+        os.makedirs(upload_folder)
+    file_path = os.path.join(upload_folder, filename)
+    try:
+        file.save(file_path)
+    except Exception as e:
+        return jsonify({"error": f"File saving failed: {str(e)}"}), 500
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        return jsonify({"error": f"Failed to read file: {str(e)}"}), 500
+
+    title = request.form.get("title", filename)
+    document = Document(title=title, content=content, file_path=file_path)
+
     db.session.add(document)
     db.session.commit()
 
-    # Generate embeddings
-    embedding_vector = generate_embedding(data["content"])
-    embedding_entry = Embedding(document_id=document.id, embedding=embedding_vector)
+    # Generate embeddings for the document content
+    try:
+        embedding_vector = generate_embedding(document.content)
+    except Exception as e:
+        current_app.logger.error(f"Embedding generation failed: {e}")
+        return jsonify({"error": f"Embedding generation failed: {str(e)}"}), 500
+
+    embedding_entry = Embedding(document_id=document.id, embedding=embedding_vector.tolist())
     db.session.add(embedding_entry)
     db.session.commit()
 
-    return jsonify({"message": "Document stored successfully"}), 201
+    return jsonify({"message": "Document stored successfully", "document_id": document.id}), 201
 
-# Document Selection API
+# Select documents considered for Q&A retrieval
 @main.route("/select-documents", methods=["POST"])
 @jwt_required()
 def select_documents():
     user_id = get_jwt_identity()
-    data = request.json
-    if "document_ids" not in data:
+    data = request.get_json()
+    if not data or "document_ids" not in data:
         return jsonify({"error": "Document IDs are required"}), 400
 
     # Validate document existence
@@ -40,8 +67,8 @@ def select_documents():
     if not selected_docs:
         return jsonify({"error": "No valid documents found"}), 404
 
-    # Store the selected documents in the database for the user
-    SelectedDocument.query.filter_by(user_id=user_id).delete()  # Clear previous selections
+    # Clear previous selections for this user
+    SelectedDocument.query.filter_by(user_id=user_id).delete()
     for doc in selected_docs:
         selection = SelectedDocument(user_id=user_id, document_id=doc.id)
         db.session.add(selection)
@@ -49,13 +76,13 @@ def select_documents():
     db.session.commit()
     return jsonify({"selected_documents": [doc.id for doc in selected_docs]}), 200
 
-# Q&A Retrieval
+# Accepts a user question, generates an embedding, retrieves relevant documents, and returns a summary of document content
 @main.route("/ask", methods=["POST"])
 @jwt_required()
 def ask_question():
     user_id = get_jwt_identity()
-    data = request.json
-    if "question" not in data:
+    data = request.get_json()
+    if not data or "question" not in data:
         return jsonify({"error": "Question is required"}), 400
 
     # Retrieve user's selected documents
@@ -63,9 +90,15 @@ def ask_question():
     if not selected_doc_ids:
         return jsonify({"error": "No documents selected. Please select documents first."}), 400
 
-    # Generate embedding and retrieve docs
-    question_embedding = generate_embedding(data["question"])
-    retrieved_docs = retrieve_documents(question_embedding)
+    # Generate the question embedding
+    try:
+        question_embedding = generate_embedding(data["question"])
+    except Exception as e:
+        current_app.logger.error(f"Question embedding generation failed: {e}")
+        return jsonify({"error": f"Embedding generation failed: {str(e)}"}), 500
+
+    # Retrieve relevant documents based on the question embedding
+    retrieved_docs = retrieve_documents(data["question"], question_embedding)
 
     # Filter retrieved documents based on selected ones
     filtered_docs = [doc for doc in retrieved_docs if doc.id in selected_doc_ids]
