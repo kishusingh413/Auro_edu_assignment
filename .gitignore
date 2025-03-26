@@ -1,1 +1,7 @@
+__pycache__/
+*.pyc
+instance/
+migrations/
 .env
+uploads/
+logs/

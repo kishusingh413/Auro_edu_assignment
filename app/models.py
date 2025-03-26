@@ -14,12 +14,13 @@ class Document(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(255), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    file_path = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Embedding(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     document_id = db.Column(db.Integer, db.ForeignKey('document.id'), nullable=False)
-    embedding = db.Column(JSON, nullable=False)  # Storing as JSON array
+    embedding = db.Column(JSON, nullable=False)  # Stored as JSON array
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class SelectedDocument(db.Model):

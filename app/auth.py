@@ -5,15 +5,14 @@ from .models import db, User
 
 auth = Blueprint("auth", __name__)
 
-# User Registration
+# Registers a new user
 @auth.route("/register", methods=["POST"])
 def register():
-    data = request.json
-    if "username" not in data or "password" not in data:
+    data = request.get_json()
+    if not data or "username" not in data or "password" not in data:
         return jsonify({"error": "Username and password required"}), 400
     
-    existing_user = User.query.filter_by(username=data["username"]).first()
-    if existing_user:
+    if User.query.filter_by(username=data["username"]).first():
         return jsonify({"error": "Username already exists"}), 400
 
     hashed_password = generate_password_hash(data["password"])
@@ -23,24 +22,26 @@ def register():
     
     return jsonify({"message": "User registered successfully"}), 201
 
-# User Login
+# Authenticates a user and returns a JWT access token
 @auth.route("/login", methods=["POST"])
 def login():
-    data = request.json
-    user = User.query.filter_by(username=data["username"]).first()
+    data = request.get_json()
+    if not data or "username" not in data or "password" not in data:
+        return jsonify({"error": "Username and password required"}), 400
 
+    user = User.query.filter_by(username=data["username"]).first()
     if user and check_password_hash(user.password, data["password"]):
         access_token = create_access_token(identity=user.id)
         return jsonify(access_token=access_token), 200
+    
     return jsonify({"error": "Invalid credentials"}), 401
 
-# Get Profile
+# Returns the profile details of the currently authenticated user
 @auth.route("/profile", methods=["GET"])
 @jwt_required()
 def profile():
     user_id = get_jwt_identity()
     user = User.query.get(user_id)
-
     if not user:
         return jsonify({"error": "User not found"}), 404
     

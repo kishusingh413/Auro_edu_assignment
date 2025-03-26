@@ -2,25 +2,23 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from .models import Embedding, Document
 
-# Retrieves the top-k most relevant documents using Hybrid Search (BM25 + Embeddings)
-def retrieve_documents(query_text, query_embedding, alpha=0.5, top_k=10):
-    # Fetch documents and embeddings
+# Retrieves the top-k most relevant documents using Hybrid Search (BM25 + cosine similarity)
+def retrieve_documents(query_text: str, query_embedding, alpha: float = 0.5, top_k: int = 10):
     documents = Document.query.all()
     embeddings = Embedding.query.with_entities(Embedding.document_id, Embedding.embedding).all()
 
     if not documents or not embeddings:
         return []
 
-    # Create BM25 index
+    # Create BM25 index on document content
     corpus = [doc.content for doc in documents]
-    tokenized_corpus = [doc.content.lower().split() for doc in documents]  # Tokenization
+    tokenized_corpus = [doc.content.lower().split() for doc in documents]
     bm25 = BM25Okapi(tokenized_corpus)
 
-    # Compute BM25 scores
     query_tokens = query_text.lower().split()
     bm25_scores = np.array(bm25.get_scores(query_tokens))
 
-    # Compute Embedding Similarity (Cosine Similarity)
+    # Compute cosine similarity between query embedding and document embeddings
     doc_ids, all_embeddings = zip(*embeddings)
     all_embeddings = np.array(all_embeddings)
     query_embedding = np.array(query_embedding)
@@ -28,16 +26,15 @@ def retrieve_documents(query_text, query_embedding, alpha=0.5, top_k=10):
     norms = np.linalg.norm(all_embeddings, axis=1) * np.linalg.norm(query_embedding)
     cosine_scores = np.dot(all_embeddings, query_embedding) / (norms + 1e-8)
 
-    # Normalize scores
+    # Normalize scores to range [0,1]
     if np.max(bm25_scores) > 0:
-        bm25_scores = bm25_scores / np.max(bm25_scores)  # Normalize BM25 to [0,1]
+        bm25_scores = bm25_scores / np.max(bm25_scores)
     if np.max(cosine_scores) > 0:
-        cosine_scores = cosine_scores / np.max(cosine_scores)  # Normalize cosine similarity to [0,1]
+        cosine_scores = cosine_scores / np.max(cosine_scores)
 
-    # Compute Hybrid Scores
     hybrid_scores = alpha * bm25_scores + (1 - alpha) * cosine_scores
 
-    # Retrieve top-k documents
+    # Retrieve top_k documents based on hybrid score
     top_indices = np.argpartition(hybrid_scores, -top_k)[-top_k:]
     top_indices = top_indices[np.argsort(hybrid_scores[top_indices])][::-1]
 
