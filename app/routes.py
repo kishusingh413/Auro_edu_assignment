@@ -47,6 +47,7 @@ def upload_document():
                 extracted_text = page.extract_text()
                 if extracted_text:
                     content += extracted_text
+        content = content.replace('\x00', '')
     except Exception as e:
         return jsonify({"error": f"Failed to read file: {str(e)}"}), 500
 
