@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
+import PyPDF2
 import os
 
 from .models import db, Document, Embedding, SelectedDocument
@@ -13,30 +14,44 @@ main = Blueprint("main", __name__)
 @main.route("/upload", methods=["POST"])
 @jwt_required()
 def upload_document():
+    # Retrieve user id from JWT identity
+    user_id = get_jwt_identity()
+
     # Check if file is provided and valid
     if "file" not in request.files or not request.files["file"].filename:
         return jsonify({"error": "No selected file"}), 400
 
     file = request.files['file']
     filename = secure_filename(file.filename)
+
+    # Enforce file extension to be .pdf
+    if not filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are allowed"}), 400
+
     upload_folder = current_app.config.get("UPLOAD_FOLDER")
     if not os.path.exists(upload_folder):
         os.makedirs(upload_folder)
     file_path = os.path.join(upload_folder, filename)
+    
     try:
         file.save(file_path)
     except Exception as e:
         return jsonify({"error": f"File saving failed: {str(e)}"}), 500
 
+    # Extract text content from PDF using PyPDF2
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+        with open(file_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            content = ""
+            for page in reader.pages:
+                extracted_text = page.extract_text()
+                if extracted_text:
+                    content += extracted_text
     except Exception as e:
         return jsonify({"error": f"Failed to read file: {str(e)}"}), 500
 
     title = request.form.get("title", filename)
-    document = Document(title=title, content=content, file_path=file_path)
-
+    document = Document(user_id=user_id, title=title, content=content, file_path=file_path)
     db.session.add(document)
     db.session.commit()
 
@@ -52,6 +67,14 @@ def upload_document():
     db.session.commit()
 
     return jsonify({"message": "Document stored successfully", "document_id": document.id}), 201
+
+# Retrieve all the user documents
+@main.route("/documents", methods=["GET"])
+@jwt_required()
+def get_documents():
+    user_id = get_jwt_identity()
+    documents = Document.query.filter_by(user_id=user_id).all()
+    return jsonify([{"id": doc.id, "title": doc.title} for doc in documents]), 200
 
 # Select documents considered for Q&A retrieval
 @main.route("/select-documents", methods=["POST"])
